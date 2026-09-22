@@ -69,13 +69,20 @@
   /* ---------------- API ---------------- */
   function call(action, data) {
     var body = Object.assign({ action: action, token: S.token }, data || {});
-    return fetch(S.api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' })
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 15000);
+    return fetch(S.api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow', signal: ctrl ? ctrl.signal : undefined })
       .then(function (r) { if (!r.ok) throw new Error('เชื่อมต่อไม่ได้ (' + r.status + ')'); return r.json(); })
       .then(function (res) {
         if (res.status === 'ok') return res.data;
         if (res.message === 'SESSION_EXPIRED') { logout(true); throw new Error('หมดเวลาใช้งาน กรุณาเข้าสู่ระบบใหม่'); }
         throw new Error(res.message || 'ผิดพลาด');
-      });
+      })
+      .catch(function (e) {
+        if (e && e.name === 'AbortError') throw new Error('เซิร์ฟเวอร์ตอบช้า กรุณากดลองใหม่');
+        throw e;
+      })
+      .then(function (d) { clearTimeout(timer); return d; }, function (e) { clearTimeout(timer); throw e; });
   }
 
   /* ---------------- setup / login ---------------- */
@@ -128,15 +135,28 @@
     $('#exUser').textContent = S.user ? S.user.name : '';
     updateStats();
     var list = $('#exList');
-    list.innerHTML = '<div class="empty">กำลังโหลด…</div>';
+    var hasCache = false;
+    try {
+      var cached = JSON.parse(LS.get('exams') || '[]');
+      if (cached.length) { S.exams = cached; hasCache = true; renderExams(); }
+    } catch (x) { /* ignore */ }
+    if (!hasCache) list.innerHTML = '<div class="empty">กำลังโหลด…<br><small>กำลังเชื่อมต่อ Google Apps Script</small></div>';
+    if (!navigator.onLine) {
+      if (!hasCache) list.innerHTML = '<div class="empty">ออฟไลน์และยังไม่มีข้อมูลที่บันทึกไว้<br><small>เชื่อมต่ออินเทอร์เน็ตแล้วกดปุ่มรีเฟรช</small></div>';
+      else toast('ออฟไลน์ — แสดงรายการที่บันทึกไว้', true);
+      return;
+    }
     call('exams').then(function (d) {
       S.exams = d.rows; S.config = Object.assign(S.config, d.config || {}); LS.set('config', JSON.stringify(S.config));
       LS.set('exams', JSON.stringify(d.rows));
       renderExams();
     }).catch(function (e) {
-      try { S.exams = JSON.parse(LS.get('exams') || '[]'); } catch (x) { S.exams = []; }
-      renderExams();
-      toast('ออฟไลน์: ' + e.message, true);
+      if (!hasCache) {
+        S.exams = [];
+        list.innerHTML = '<div class="empty">โหลดรายการไม่สำเร็จ<br><small>' + esc(e.message) + '</small><br><button class="btn mt" type="button" id="retryExams">ลองใหม่</button></div>';
+        var retry = $('#retryExams'); if (retry) retry.addEventListener('click', showExams);
+      }
+      toast((hasCache ? 'แสดงข้อมูลเดิม: ' : '') + e.message, true);
     });
   }
   function renderExams() {
