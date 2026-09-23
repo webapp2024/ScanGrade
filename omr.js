@@ -307,14 +307,35 @@
     return out.F;
   }
 
-  /** ตัดสิน 1 กลุ่มวง: index · -1 ว่าง · -2 ตอบซ้อน + ความมั่นใจ */
-  function decide(vals, min, margin) {
+  /**
+   * ตัดสิน 1 กลุ่มวง: index · -1 ว่าง · -2 ตอบซ้อน + ความมั่นใจ
+   * นับว่าระบายเมื่อ เข้ม ≥ min (ค่าตั้งค่า) หรือ — ถ้ามี tc — เข้มกว่าวงอื่นในกลุ่มเดียวกันอย่างน้อย tc
+   * (ดินสอจาง/แสงกล้องทำให้ค่าเข้มลดทั้งแผ่น แต่ยังต่างจากวงว่างข้าง ๆ ชัดเจน)
+   */
+  function decide(vals, min, margin, tc) {
     var order = vals.map(function (v, i) { return i; }).sort(function (a, b) { return vals[b] - vals[a]; });
     var a = vals[order[0]], b = vals.length > 1 ? vals[order[1]] : 0, idx, conf;
-    if (a < min) { idx = -1; conf = Math.min(1, (min - a) / 0.12); }
-    else if (b >= min && a - b < margin) { idx = -2; conf = Math.min(1, (b - min) / 0.12); }
-    else { idx = order[0]; conf = Math.min(1, Math.min(a - min, (a - b) - margin + 0.1) / 0.12); }
+    var rest = order.slice(1).map(function (i) { return vals[i]; }).sort(function (x, y) { return x - y; });
+    var base = rest.length ? rest[(rest.length - 1) >> 1] : 0; // ค่ากลางของวงที่เหลือ = ระดับวงว่างในกลุ่มนี้
+    var strength = function (v) { return tc ? Math.max(v - min, Math.min(v - 0.15, v - base - tc)) : v - min; };
+    var second = b >= min || (tc && strength(b) >= 0 && b >= a * 0.7); // วงที่ 2 ต้องเข้มพอ ๆ กันจึงนับว่าซ้อน (กันรอยลบ)
+    if (strength(a) < 0) { idx = -1; conf = Math.min(1, -strength(a) / 0.12); }
+    else if (second && a - b < margin) { idx = -2; conf = Math.min(1, strength(b) / 0.12); }
+    else { idx = order[0]; conf = Math.min(1, Math.min(strength(a), (a - b) - margin + 0.1) / 0.12); }
     return { i: idx, conf: Math.max(0, conf), top: a, second: b };
+  }
+
+  /** ระดับ "ต่างจากวงว่าง" ที่แผ่นนี้ใช้ = 45% ของความต่างทั่วไปของข้อที่ระบายชัด · 0 = ไม่ใช้ (ข้อที่ระบายชัดน้อยเกินไป) */
+  function contrastThreshold(groups) {
+    var cs = [];
+    groups.forEach(function (vals) {
+      var v = vals.slice().sort(function (x, y) { return y - x; }), rest = v.slice(1).sort(function (x, y) { return x - y; });
+      var c = v[0] - (rest.length ? rest[(rest.length - 1) >> 1] : 0);
+      if (c >= 0.15) cs.push(c);
+    });
+    if (cs.length < 3) return 0;
+    cs.sort(function (x, y) { return x - y; });
+    return Math.max(0.12, Math.min(0.2, 0.45 * cs[cs.length >> 1]));
   }
 
   var CORNER_ORDER = [0, 1, 3, 2]; // layout.fiducials = TL,TR,BL,BR → ตามเข็ม TL,TR,BR,BL
@@ -325,10 +346,14 @@
     var dk = function (x, y, r) { var p = F ? F.at(x, y) : { x: x, y: y }; return darkness(g, H, p.x, p.y, r); };
     var bitVals = L.bits.map(function (b) { return dk(b.x + b.s / 2, b.y + b.s / 2, b.s * 0.45); });
     var bits = bitVals.map(function (v) { return v > 0.45 ? 1 : 0; });
-    var R = L.bubbleR, grp = function (list, r) { return decide(list.map(function (b) { return dk(b.x, b.y, r); }), min, margin); };
+    var R = L.bubbleR, tc = 0, val = function (list, r) { return list.map(function (b) { return dk(b.x, b.y, r); }); };
+    var codeVals = L.code.cols.map(function (col) { return val(col.rows, R); });
+    var ansVals = L.answer.items.map(function (it) { return it.xs.map(function (x) { return dk(x, it.y, L.answer.r); }); });
+    if (opt.relative !== false) tc = contrastThreshold(ansVals.concat(codeVals));
+    var grp = function (list, r) { return decide(val(list, r), min, margin, tc); };
     var code = '', seatOk = true, codeTops = [];
     L.code.cols.forEach(function (col, ci) {
-      var d = grp(col.rows, R); confs.push(d.conf); codeTops.push(Math.round(d.top * 100) / 100);
+      var d = decide(codeVals[ci], min, margin, tc); confs.push(d.conf); codeTops.push(Math.round(d.top * 100) / 100);
       code += d.i >= 0 ? String(d.i) : d.i === -1 ? '?' : '*';
     });
     var tens = grp(L.seat.tens, R), units = grp(L.seat.units, R), gi = L.seat.group.length ? grp(L.seat.group, R) : { i: -1, conf: 1 };
@@ -337,9 +362,9 @@
     else seatOk = false;
     if (code.indexOf('?') > -1 || code.indexOf('*') > -1) flags.push('code_incomplete');
     var answers = '', details = [];
-    L.answer.items.forEach(function (it) {
-      var vals = it.xs.map(function (x) { return dk(x, it.y, L.answer.r); });
-      var d = decide(vals, min, margin);
+    L.answer.items.forEach(function (it, k) {
+      var vals = ansVals[k];
+      var d = decide(vals, min, margin, tc);
       answers += d.i >= 0 ? String(d.i + 1) : d.i === -1 ? '0' : '9';
       if (d.i === -2) flags.push('multi:' + it.no);
       if (d.i === -1) flags.push('blank:' + it.no);
@@ -357,7 +382,7 @@
     var conf = confs.length ? confs.reduce(function (a, b) { return Math.min(a, b); }, 1) : 0;
     return {
       bits: bits, n_bits: SL.decodeBits(bits), code: code, seat: seat, seat_ok: seatOk, answers: answers,
-      flags: flags, confidence: Math.round(conf * 1000) / 1000, geometry_ok: geomOk, details: details, code_tops: codeTops
+      flags: flags, confidence: Math.round(conf * 1000) / 1000, geometry_ok: geomOk, details: details, code_tops: codeTops, contrast_min: Math.round(tc * 100) / 100
     };
   }
 
@@ -405,8 +430,8 @@
     return { w: w, h: h, d: d };
   }
 
-  // VERSION แสดงบนหน้าสแกน ใช้เช็คว่ามือถือโหลดตัวอ่านล่าสุดแล้ว · 2 = ปรับตำแหน่งวงเฉพาะจุด (กระดาษโค้ง) · 3 = + ค่าวินิจฉัย code_tops
-  var OMR = { VERSION: 3, fromImageData: fromImageData, downscale: downscale, blobs: blobs, detect: detect, refine: refine, homography: homography, apply: apply, darkness: darkness, decide: decide, align: align, scan: scan, readWith: readWith, rectify: rectify };
+  // VERSION แสดงบนหน้าสแกน ใช้เช็คว่ามือถือโหลดตัวอ่านล่าสุดแล้ว · 2 = ปรับตำแหน่งวงเฉพาะจุด (กระดาษโค้ง) · 3 = + ค่าวินิจฉัย code_tops · 4 = ดินสอจาง: เทียบกับวงอื่นในข้อเดียวกัน
+  var OMR = { VERSION: 4, fromImageData: fromImageData, downscale: downscale, blobs: blobs, detect: detect, refine: refine, homography: homography, apply: apply, darkness: darkness, decide: decide, align: align, scan: scan, readWith: readWith, rectify: rectify };
   root.OMR = OMR;
   if (typeof module !== 'undefined' && module.exports) module.exports = OMR;
 })(typeof window !== 'undefined' ? window : this);
