@@ -326,9 +326,9 @@
     var bitVals = L.bits.map(function (b) { return dk(b.x + b.s / 2, b.y + b.s / 2, b.s * 0.45); });
     var bits = bitVals.map(function (v) { return v > 0.45 ? 1 : 0; });
     var R = L.bubbleR, grp = function (list, r) { return decide(list.map(function (b) { return dk(b.x, b.y, r); }), min, margin); };
-    var code = '', seatOk = true;
+    var code = '', seatOk = true, codeTops = [];
     L.code.cols.forEach(function (col, ci) {
-      var d = grp(col.rows, R); confs.push(d.conf);
+      var d = grp(col.rows, R); confs.push(d.conf); codeTops.push(Math.round(d.top * 100) / 100);
       code += d.i >= 0 ? String(d.i) : d.i === -1 ? '?' : '*';
     });
     var tens = grp(L.seat.tens, R), units = grp(L.seat.units, R), gi = L.seat.group.length ? grp(L.seat.group, R) : { i: -1, conf: 1 };
@@ -357,7 +357,7 @@
     var conf = confs.length ? confs.reduce(function (a, b) { return Math.min(a, b); }, 1) : 0;
     return {
       bits: bits, n_bits: SL.decodeBits(bits), code: code, seat: seat, seat_ok: seatOk, answers: answers,
-      flags: flags, confidence: Math.round(conf * 1000) / 1000, geometry_ok: geomOk, details: details
+      flags: flags, confidence: Math.round(conf * 1000) / 1000, geometry_ok: geomOk, details: details, code_tops: codeTops
     };
   }
 
@@ -405,8 +405,8 @@
     return { w: w, h: h, d: d };
   }
 
-  // VERSION แสดงบนหน้าสแกน ใช้เช็คว่ามือถือโหลดตัวอ่านล่าสุดแล้ว · 2 = ปรับตำแหน่งวงเฉพาะจุด (กระดาษโค้ง)
-  var OMR = { VERSION: 2, fromImageData: fromImageData, downscale: downscale, blobs: blobs, detect: detect, refine: refine, homography: homography, apply: apply, darkness: darkness, decide: decide, align: align, scan: scan, readWith: readWith, rectify: rectify };
+  // VERSION แสดงบนหน้าสแกน ใช้เช็คว่ามือถือโหลดตัวอ่านล่าสุดแล้ว · 2 = ปรับตำแหน่งวงเฉพาะจุด (กระดาษโค้ง) · 3 = + ค่าวินิจฉัย code_tops
+  var OMR = { VERSION: 3, fromImageData: fromImageData, downscale: downscale, blobs: blobs, detect: detect, refine: refine, homography: homography, apply: apply, darkness: darkness, decide: decide, align: align, scan: scan, readWith: readWith, rectify: rectify };
   root.OMR = OMR;
   if (typeof module !== 'undefined' && module.exports) module.exports = OMR;
 })(typeof window !== 'undefined' ? window : this);

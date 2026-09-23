@@ -311,6 +311,8 @@
         return;
       }
       cam.lastCorners = corners || r.corners;
+      var o = OMR.apply(r.H, 100, 150), o2 = OMR.apply(r.H, 110, 150);
+      r.diag = { vw: vw, vh: vh, pxmm: Math.hypot(o2.x - o.x, o2.y - o.y) / 10 };
       r.image = makeImage(g, r.H, r.field);
       showResult(r);
     }, 30);
@@ -359,6 +361,7 @@
       (!st ? '<div class="r-code"><span>แก้เลขประจำตัว</span><input id="rCode" inputmode="numeric" maxlength="5" value="' + esc(r.code.replace(/\D/g, '')) + '"><span id="rCodeName" style="color:var(--ink2);font-size:.9rem"></span></div>' : '') +
       '<div class="r-grid">' + grid + '</div>' +
       (needReview ? '<div style="font-size:.85rem;color:var(--ink2);margin-top:.6rem">แผ่นนี้จะเข้า <b>คิวตรวจทาน</b> ในระบบหลังบ้าน</div>' : '') +
+      diagHtml(r) +
       '<div class="r-actions"><button class="btn" id="rRetry">สแกนใหม่</button><button class="btn btn-primary" id="rSave">บันทึก</button></div>' +
       (!needReview ? '<div class="countdown"><i id="rBar"></i></div>' : '');
     el.classList.remove('hidden');
@@ -368,6 +371,8 @@
       var s2 = S.byCode[normCode(codeIn.value)];
       $('#rCodeName').textContent = s2 ? '✓ ' + s2.name + ' (' + s2.seat + ')' : '';
     });
+    $('#rShot').addEventListener('click', function (e) { e.preventDefault(); clearAuto(); shareShot(); });
+    prepShot();
     $('#rRetry').addEventListener('click', function () { clearAuto(); el.classList.add('hidden'); cam.hist = []; cam.needClear = false; cam.paused = false; });
     $('#rSave').addEventListener('click', function () { clearAuto(); save(r, st, needReview); });
     el.addEventListener('pointerdown', clearAuto, { once: true });
@@ -381,6 +386,36 @@
       };
       autoT = requestAnimationFrame(tick);
     }
+  }
+  /** บรรทัดวินิจฉัยเล็ก ๆ ใต้ผล — ไว้ดูว่าทำไมอ่านไม่ได้ (ความเข้มของวงที่ระบายเทียบกับเกณฑ์) */
+  function diagHtml(r) {
+    var d = r.diag || {}, ansTop = 0;
+    (r.details || []).forEach(function (v) { v.forEach(function (x) { if (x > ansTop) ansTop = x; }); });
+    var t = 'ตัวอ่าน v' + OMR.VERSION + ' · ภาพ ' + d.vw + '×' + d.vh + ' · ' + (d.pxmm || 0).toFixed(1) + ' px/มม. · เกณฑ์ ' + S.config.omr_min +
+      ' · รหัส ' + (r.code_tops || []).join(' ') + ' · คำตอบสูงสุด ' + ansTop.toFixed(2) + (r.geometry_ok ? '' : ' · ตำแหน่งไม่ผ่าน');
+    return '<div style="font-size:.72rem;color:var(--ink2);margin-top:.6rem;line-height:1.4">' + esc(t) +
+      ' · <a href="#" id="rShot" style="color:inherit">บันทึกภาพนี้ส่งให้ผู้ดูแล</a></div>';
+  }
+  /** เตรียมไฟล์ภาพจากกล้องไว้ก่อน (iPhone ต้องเรียก share ทันทีตอนแตะ ห้ามรอ async) */
+  var shot = null;
+  function prepShot() {
+    shot = null;
+    work.toBlob(function (blob) {
+      if (!blob) return;
+      var name = 'scangrade-' + Date.now() + '.jpg';
+      try { shot = new File([blob], name, { type: 'image/jpeg' }); } catch (e) { shot = blob; shot.name = name; }
+    }, 'image/jpeg', 0.92);
+  }
+  /** ส่ง/บันทึกภาพจากกล้องที่ใช้อ่านแผ่นนี้ (ภาพเต็มก่อนดัด) */
+  function shareShot() {
+    if (!shot) { toast('กำลังเตรียมภาพ ลองแตะอีกครั้ง', true); return; }
+    if (navigator.canShare && shot instanceof File && navigator.canShare({ files: [shot] })) {
+      navigator.share({ files: [shot], title: 'ScanGrade' }).catch(function () { /* ยกเลิก */ });
+      return;
+    }
+    var a = document.createElement('a'); a.href = URL.createObjectURL(shot); a.download = shot.name || 'scangrade.jpg';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
   }
   function clearAuto() { if (autoT) { cancelAnimationFrame(autoT); autoT = null; var b = $('#rBar'); if (b) b.parentNode.remove(); } }
 
