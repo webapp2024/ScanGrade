@@ -1,5 +1,5 @@
 /* service worker: เก็บไฟล์หน้าสแกนไว้ในเครื่อง → เปิดได้แม้ไม่มีเน็ต (การส่งผลรอจนมีเน็ต) */
-var CACHE = 'scangrade-scanner-v2';
+var CACHE = 'scangrade-scanner-v3';
 var FILES = ['./', 'index.html', 'app.js', 'omr.js', 'sheet-layout.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', function (e) {

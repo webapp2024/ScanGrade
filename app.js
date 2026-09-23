@@ -311,14 +311,14 @@
         return;
       }
       cam.lastCorners = corners || r.corners;
-      r.image = makeImage(g, r.H);
+      r.image = makeImage(g, r.H, r.field);
       showResult(r);
     }, 30);
   }
   /** ภาพดัดตรงขนาดเล็ก (JPEG) ไว้ให้ครูตรวจทานในระบบหลังบ้าน */
-  function makeImage(g, H) {
+  function makeImage(g, H, F) {
     try {
-      var rg = OMR.rectify(g, H, 3.6), c = document.createElement('canvas');
+      var rg = OMR.rectify(g, H, 3.6, F), c = document.createElement('canvas');
       c.width = rg.w; c.height = rg.h;
       var ctx = c.getContext('2d'), img = ctx.createImageData(rg.w, rg.h);
       for (var i = 0, j = 0; i < rg.d.length; i++, j += 4) { img.data[j] = img.data[j + 1] = img.data[j + 2] = rg.d[i]; img.data[j + 3] = 255; }
@@ -338,6 +338,7 @@
     var multi = r.flags.filter(function (f) { return f.indexOf('multi:') === 0; }).map(function (f) { return f.slice(6); });
     var blank = r.flags.filter(function (f) { return f.indexOf('blank:') === 0; }).map(function (f) { return f.slice(6); });
     var low = r.flags.filter(function (f) { return f.indexOf('low_conf:') === 0; }).map(function (f) { return f.slice(9); });
+    if (r.flags.indexOf('warp') > -1) flags.push(['bad', 'กระดาษโค้ง/ไม่เรียบ — วางให้เรียบแล้วสแกนใหม่']);
     if (multi.length) flags.push(['warn', 'ตอบซ้อน ข้อ ' + multi.join(', ')]);
     if (low.length) flags.push(['warn', 'อ่านไม่ชัด ข้อ ' + low.join(', ')]);
     if (blank.length) flags.push(['mute', 'ไม่ตอบ ' + blank.length + ' ข้อ']);
