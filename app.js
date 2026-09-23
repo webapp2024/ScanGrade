@@ -69,20 +69,13 @@
   /* ---------------- API ---------------- */
   function call(action, data) {
     var body = Object.assign({ action: action, token: S.token }, data || {});
-    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 15000);
-    return fetch(S.api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow', signal: ctrl ? ctrl.signal : undefined })
+    return fetch(S.api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' })
       .then(function (r) { if (!r.ok) throw new Error('เชื่อมต่อไม่ได้ (' + r.status + ')'); return r.json(); })
       .then(function (res) {
         if (res.status === 'ok') return res.data;
         if (res.message === 'SESSION_EXPIRED') { logout(true); throw new Error('หมดเวลาใช้งาน กรุณาเข้าสู่ระบบใหม่'); }
         throw new Error(res.message || 'ผิดพลาด');
-      })
-      .catch(function (e) {
-        if (e && e.name === 'AbortError') throw new Error('เซิร์ฟเวอร์ตอบช้า กรุณากดลองใหม่');
-        throw e;
-      })
-      .then(function (d) { clearTimeout(timer); return d; }, function (e) { clearTimeout(timer); throw e; });
+      });
   }
 
   /* ---------------- setup / login ---------------- */
@@ -135,28 +128,15 @@
     $('#exUser').textContent = S.user ? S.user.name : '';
     updateStats();
     var list = $('#exList');
-    var hasCache = false;
-    try {
-      var cached = JSON.parse(LS.get('exams') || '[]');
-      if (cached.length) { S.exams = cached; hasCache = true; renderExams(); }
-    } catch (x) { /* ignore */ }
-    if (!hasCache) list.innerHTML = '<div class="empty">กำลังโหลด…<br><small>กำลังเชื่อมต่อ Google Apps Script</small></div>';
-    if (!navigator.onLine) {
-      if (!hasCache) list.innerHTML = '<div class="empty">ออฟไลน์และยังไม่มีข้อมูลที่บันทึกไว้<br><small>เชื่อมต่ออินเทอร์เน็ตแล้วกดปุ่มรีเฟรช</small></div>';
-      else toast('ออฟไลน์ — แสดงรายการที่บันทึกไว้', true);
-      return;
-    }
+    list.innerHTML = '<div class="empty">กำลังโหลด…</div>';
     call('exams').then(function (d) {
       S.exams = d.rows; S.config = Object.assign(S.config, d.config || {}); LS.set('config', JSON.stringify(S.config));
       LS.set('exams', JSON.stringify(d.rows));
       renderExams();
     }).catch(function (e) {
-      if (!hasCache) {
-        S.exams = [];
-        list.innerHTML = '<div class="empty">โหลดรายการไม่สำเร็จ<br><small>' + esc(e.message) + '</small><br><button class="btn mt" type="button" id="retryExams">ลองใหม่</button></div>';
-        var retry = $('#retryExams'); if (retry) retry.addEventListener('click', showExams);
-      }
-      toast((hasCache ? 'แสดงข้อมูลเดิม: ' : '') + e.message, true);
+      try { S.exams = JSON.parse(LS.get('exams') || '[]'); } catch (x) { S.exams = []; }
+      renderExams();
+      toast('ออฟไลน์: ' + e.message, true);
     });
   }
   function renderExams() {
@@ -311,14 +291,14 @@
         return;
       }
       cam.lastCorners = corners || r.corners;
-      r.image = makeImage(g, r.H, r.field);
+      r.image = makeImage(g, r.H);
       showResult(r);
     }, 30);
   }
   /** ภาพดัดตรงขนาดเล็ก (JPEG) ไว้ให้ครูตรวจทานในระบบหลังบ้าน */
-  function makeImage(g, H, F) {
+  function makeImage(g, H) {
     try {
-      var rg = OMR.rectify(g, H, 3.6, F), c = document.createElement('canvas');
+      var rg = OMR.rectify(g, H, 3.6), c = document.createElement('canvas');
       c.width = rg.w; c.height = rg.h;
       var ctx = c.getContext('2d'), img = ctx.createImageData(rg.w, rg.h);
       for (var i = 0, j = 0; i < rg.d.length; i++, j += 4) { img.data[j] = img.data[j + 1] = img.data[j + 2] = rg.d[i]; img.data[j + 3] = 255; }
@@ -338,7 +318,6 @@
     var multi = r.flags.filter(function (f) { return f.indexOf('multi:') === 0; }).map(function (f) { return f.slice(6); });
     var blank = r.flags.filter(function (f) { return f.indexOf('blank:') === 0; }).map(function (f) { return f.slice(6); });
     var low = r.flags.filter(function (f) { return f.indexOf('low_conf:') === 0; }).map(function (f) { return f.slice(9); });
-    if (r.flags.indexOf('warp') > -1) flags.push(['bad', 'กระดาษโค้ง/ไม่เรียบ — วางให้เรียบแล้วสแกนใหม่']);
     if (multi.length) flags.push(['warn', 'ตอบซ้อน ข้อ ' + multi.join(', ')]);
     if (low.length) flags.push(['warn', 'อ่านไม่ชัด ข้อ ' + low.join(', ')]);
     if (blank.length) flags.push(['mute', 'ไม่ตอบ ' + blank.length + ' ข้อ']);

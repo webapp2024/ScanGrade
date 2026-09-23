@@ -201,112 +201,6 @@
     return Math.max(0, Math.min(1, 1 - (sum / n) / white));
   }
 
-  /* ------------------------------------------------------------------ local alignment */
-  // 4 มุมบอกตำแหน่งได้แม่นเฉพาะกระดาษที่เรียบสนิท — กระดาษโค้ง/ยกขอบ หรือเลนส์กล้อง ทำให้กลางแผ่นเพี้ยนได้ 2–3 มม.
-  // (เกือบเท่ารัศมีวง) จึงวัดตำแหน่งจริงของ "ขอบวงที่พิมพ์ไว้" ทุกวง (วงว่างหรือระบายแล้วก็มีขอบเหมือนกัน)
-  // แล้วสร้างสนามการเลื่อนแบบเรียบ (mm → mm) มาแก้ตำแหน่งก่อนอ่าน
-  var AL_S1 = 2.5;   // รอบแรกค้นหา ±2.5 มม. (< ครึ่งระยะห่างแถวที่แคบสุด 5.25 มม. → ไม่กระโดดไปแถวข้าง ๆ)
-  var AL_S2 = 1.0;   // รอบสองค้นรอบค่าที่คาดจากรอบแรก
-  var AL_SIGMA = 8;  // ความกว้างของการเกลี่ย (มม.)
-  var AL_GRID = 5;   // ความละเอียดตารางสนามการเลื่อน (มม.)
-  var RING_N = 20, RING_COS = [], RING_SIN = [];
-  for (var ri_ = 0; ri_ < RING_N; ri_++) { RING_COS.push(Math.cos(ri_ * 2 * Math.PI / RING_N)); RING_SIN.push(Math.sin(ri_ * 2 * Math.PI / RING_N)); }
-
-  function pix(g, x, y) {
-    var X = Math.floor(x), Y = Math.floor(y);
-    if (X < 0 || Y < 0 || X >= g.w - 1 || Y >= g.h - 1) return 255;
-    var fx = x - X, fy = y - Y, i = Y * g.w + X, d = g.d;
-    return (d[i] * (1 - fx) + d[i + 1] * fx) * (1 - fy) + (d[i + g.w] * (1 - fx) + d[i + g.w + 1] * fx) * fy;
-  }
-
-  /** หาตำแหน่งขอบวง 1 วงรอบจุด (x,y)+(cx,cy) มม. ภายใน ±S: คะแนน = สีกระดาษนอกวง − สีขอบวง */
-  function findRing(g, H, x, y, r, cx, cy, S) {
-    var c = apply(H, x, y), ex = apply(H, x + 1, y), ey = apply(H, x, y + 1); // ใกล้ ๆ จุดนี้ถือว่าเป็น affine
-    var ax = ex.x - c.x, ay = ex.y - c.y, bx = ey.x - c.x, by = ey.y - c.y;
-    var score = function (dx, dy) {
-      var s = 0;
-      for (var k = 0; k < RING_N; k++) {
-        var u1 = dx + r * RING_COS[k], v1 = dy + r * RING_SIN[k], u2 = dx + r * 1.32 * RING_COS[k], v2 = dy + r * 1.32 * RING_SIN[k];
-        s += pix(g, c.x + u2 * ax + v2 * bx, c.y + u2 * ay + v2 * by) - pix(g, c.x + u1 * ax + v1 * bx, c.y + u1 * ay + v1 * by);
-      }
-      return s / RING_N;
-    };
-    var best = null, pass = function (ox, oy, R, st) {
-      for (var dy = -R; dy <= R + 1e-9; dy += st) for (var dx = -R; dx <= R + 1e-9; dx += st) {
-        var sc = score(ox + dx, oy + dy);
-        if (!best || sc > best.s) best = { dx: ox + dx, dy: oy + dy, s: sc };
-      }
-    };
-    pass(cx, cy, S, 0.5);
-    pass(best.dx, best.dy, 0.5, 0.125);
-    best.edge = Math.abs(best.dx - cx) > S - 0.2 || Math.abs(best.dy - cy) > S - 0.2;
-    return best;
-  }
-
-  /** สนามการเลื่อนแบบเรียบจากจุดวัด (local linear regression ถ่วงน้ำหนักแบบเกาส์) → ตาราง AL_GRID มม. */
-  function fitField(pts) {
-    var nx = Math.ceil(210 / AL_GRID) + 1, ny = Math.ceil(297 / AL_GRID) + 1, gx = new Float32Array(nx * ny), gy = new Float32Array(nx * ny);
-    var inv = 1 / (2 * AL_SIGMA * AL_SIGMA), lam = 0.1 * AL_SIGMA * AL_SIGMA;
-    for (var j = 0; j < ny; j++) for (var i = 0; i < nx; i++) {
-      var X = i * AL_GRID, Y = j * AL_GRID, m = [0, 0, 0, 0, 0, 0], bx = [0, 0, 0], by = [0, 0, 0];
-      for (var k = 0; k < pts.length; k++) {
-        var p = pts[k], u = p.x - X, v = p.y - Y, w = p.w * Math.exp(-(u * u + v * v) * inv);
-        m[0] += w; m[1] += w * u; m[2] += w * v; m[3] += w * u * u; m[4] += w * u * v; m[5] += w * v * v;
-        bx[0] += w * p.dx; bx[1] += w * u * p.dx; bx[2] += w * v * p.dx;
-        by[0] += w * p.dy; by[1] += w * u * p.dy; by[2] += w * v * p.dy;
-      }
-      if (m[0] < 1e-12) continue;
-      var a = m[0], b = m[1], c = m[2], d = m[3] + lam * m[0], e = m[4], f = m[5] + lam * m[0];
-      var det = a * (d * f - e * e) - b * (b * f - e * c) + c * (b * e - d * c);
-      var solve = function (r) { // Cramer: เอาเฉพาะค่าคงที่ (ค่าที่จุดนี้)
-        return Math.abs(det) < 1e-12 ? r[0] / a : (r[0] * (d * f - e * e) - b * (r[1] * f - e * r[2]) + c * (r[1] * e - d * r[2])) / det;
-      };
-      gx[j * nx + i] = solve(bx); gy[j * nx + i] = solve(by);
-    }
-    return {
-      nx: nx, ny: ny, step: AL_GRID, gx: gx, gy: gy,
-      at: function (x, y) {
-        var fx = Math.max(0, Math.min(nx - 1.001, x / AL_GRID)), fy = Math.max(0, Math.min(ny - 1.001, y / AL_GRID));
-        var i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, q = j * nx + i;
-        var bl = function (A) { return (A[q] * (1 - tx) + A[q + 1] * tx) * (1 - ty) + (A[q + nx] * (1 - tx) + A[q + nx + 1] * tx) * ty; };
-        return { x: x + bl(gx), y: y + bl(gy) };
-      }
-    };
-  }
-
-  /** วัดทุกวงบนแผ่น → สนามการเลื่อน (คืน null ถ้าวัดได้น้อยเกินไป) */
-  function align(g, L, H) {
-    var R = L.bubbleR, feats = [];
-    L.code.cols.forEach(function (c) { c.rows.forEach(function (b) { feats.push({ x: b.x, y: b.y, r: R }); }); });
-    L.seat.tens.concat(L.seat.units, L.seat.group).forEach(function (b) { feats.push({ x: b.x, y: b.y, r: R }); });
-    L.answer.items.forEach(function (it) { it.xs.forEach(function (x) { feats.push({ x: x, y: it.y, r: L.answer.r }); }); });
-    var anchors = L.fiducials.map(function (f) { return { x: f.cx, y: f.cy, dx: 0, dy: 0, w: 4 }; }); // มุมถูกปรับละเอียดแล้ว
-    var keep = function (ms) {
-      var sc = ms.map(function (m) { return m.s; }).sort(function (a, b) { return a - b; }), med = sc[sc.length >> 1] || 0;
-      return ms.filter(function (m) { return !m.edge && m.s >= Math.max(6, med * 0.45); });
-    };
-    var robust = function (ms) { // ตัดจุดที่ต่างจากค่าเฉลี่ยเพื่อนบ้านเกิน 1 มม. (เช่น ระบายเลอะออกนอกวง) แล้วสร้างสนาม
-      var inv = 1 / (2 * AL_SIGMA * AL_SIGMA);
-      var good = ms.filter(function (m) {
-        var sw = 0, sx = 0, sy = 0;
-        ms.forEach(function (o) { if (o === m) return; var w = Math.exp(-((o.x - m.x) * (o.x - m.x) + (o.y - m.y) * (o.y - m.y)) * inv); sw += w; sx += w * o.dx; sy += w * o.dy; });
-        return sw < 0.3 || Math.hypot(sx / sw - m.dx, sy / sw - m.dy) <= 1.0; // จุดโดดเดี่ยว = ไม่มีอะไรเทียบ เก็บไว้
-      });
-      return { F: fitField(anchors.concat(good)), n: good.length };
-    };
-    var m1 = keep(feats.map(function (f) { var b = findRing(g, H, f.x, f.y, f.r, 0, 0, AL_S1); return { x: f.x, y: f.y, dx: b.dx, dy: b.dy, s: b.s, edge: b.edge, w: 1 }; }));
-    if (m1.length < 8) return null;
-    var out = robust(m1), F1 = out.F;
-    var m2 = keep(feats.map(function (f) {
-      var p = F1.at(f.x, f.y), b = findRing(g, H, f.x, f.y, f.r, p.x - f.x, p.y - f.y, AL_S2);
-      return { x: f.x, y: f.y, dx: b.dx, dy: b.dy, s: b.s, edge: b.edge, w: 1 };
-    }));
-    if (m2.length >= 8) out = robust(m2);
-    // used/total ต่ำ = วัดแล้วขัดกันเอง (กระดาษโค้งเกินครึ่งระยะแถว อาจอ่านเลื่อนแถว) → ต้องตรวจทาน
-    out.F.used = out.n; out.F.total = feats.length;
-    return out.F;
-  }
-
   /** ตัดสิน 1 กลุ่มวง: index · -1 ว่าง · -2 ตอบซ้อน + ความมั่นใจ */
   function decide(vals, min, margin) {
     var order = vals.map(function (v, i) { return i; }).sort(function (a, b) { return vals[b] - vals[a]; });
@@ -319,13 +213,12 @@
 
   var CORNER_ORDER = [0, 1, 3, 2]; // layout.fiducials = TL,TR,BL,BR → ตามเข็ม TL,TR,BR,BL
 
-  /** อ่านแผ่นเมื่อรู้ H (mm → px) แล้ว · F = สนามการเลื่อนจาก align() (ไม่มีก็ได้) */
-  function readWith(g, L, H, opt, F) {
+  /** อ่านแผ่นเมื่อรู้ H (mm → px) แล้ว */
+  function readWith(g, L, H, opt) {
     var min = opt.min || 0.3, margin = opt.margin || 0.14, flags = [], confs = [];
-    var dk = function (x, y, r) { var p = F ? F.at(x, y) : { x: x, y: y }; return darkness(g, H, p.x, p.y, r); };
-    var bitVals = L.bits.map(function (b) { return dk(b.x + b.s / 2, b.y + b.s / 2, b.s * 0.45); });
+    var bitVals = L.bits.map(function (b) { return darkness(g, H, b.x + b.s / 2, b.y + b.s / 2, b.s * 0.45); });
     var bits = bitVals.map(function (v) { return v > 0.45 ? 1 : 0; });
-    var R = L.bubbleR, grp = function (list, r) { return decide(list.map(function (b) { return dk(b.x, b.y, r); }), min, margin); };
+    var R = L.bubbleR, grp = function (list, r) { return decide(list.map(function (b) { return darkness(g, H, b.x, b.y, r); }), min, margin); };
     var code = '', seatOk = true;
     L.code.cols.forEach(function (col, ci) {
       var d = grp(col.rows, R); confs.push(d.conf);
@@ -338,7 +231,7 @@
     if (code.indexOf('?') > -1 || code.indexOf('*') > -1) flags.push('code_incomplete');
     var answers = '', details = [];
     L.answer.items.forEach(function (it) {
-      var vals = it.xs.map(function (x) { return dk(x, it.y, L.answer.r); });
+      var vals = it.xs.map(function (x) { return darkness(g, H, x, it.y, L.answer.r); });
       var d = decide(vals, min, margin);
       answers += d.i >= 0 ? String(d.i + 1) : d.i === -1 ? '0' : '9';
       if (d.i === -2) flags.push('multi:' + it.no);
@@ -347,13 +240,10 @@
       confs.push(d.conf);
       details.push(vals.map(function (v) { return Math.round(v * 100) / 100; }));
     });
-    // ตรวจเรขาคณิต: หัวคอลัมน์ + ขีดขอบขวาทุกแถวต้องดำ และช่องระหว่างขีดต้องขาว (จับการอ่านเลื่อนแถว)
+    // ตรวจเรขาคณิต: fiducial + หัวคอลัมน์ต้องดำ
     var marks = L.answer.cols.filter(function (c, ci) { return L.answer.items.some(function (it) { return it.col === ci; }); })
-      .map(function (c) { return dk(c.mark.x + c.mark.s / 2, c.mark.y + c.mark.s / 2, c.mark.s * 0.4); });
-    var tm = L.timing.map(function (t) { return dk(t.x + t.w / 2, t.y + t.h / 2, 0.7); });
-    var gaps = L.timing.slice(1).map(function (t, i) { var a = L.timing[i]; return dk(a.x + a.w / 2, (a.y + t.y + a.h) / 2, 0.5); });
-    var geomOk = marks.every(function (v) { return v > 0.45; }) && tm.every(function (v) { return v > 0.45; }) && gaps.every(function (v) { return v < 0.3; });
-    if (!geomOk || (F && F.used / F.total < 0.94)) flags.push('warp');
+      .map(function (c) { return darkness(g, H, c.mark.x + c.mark.s / 2, c.mark.y + c.mark.s / 2, c.mark.s * 0.4); });
+    var geomOk = marks.every(function (v) { return v > 0.45; });
     var conf = confs.length ? confs.reduce(function (a, b) { return Math.min(a, b); }, 1) : 0;
     return {
       bits: bits, n_bits: SL.decodeBits(bits), code: code, seat: seat, seat_ok: seatOk, answers: answers,
@@ -383,29 +273,27 @@
     }
     if (!best) return { ok: false, error: 'bits', message: 'อ่านรหัสแบบกระดาษไม่ได้ — ถ่ายให้เห็นทั้งแผ่นชัด ๆ', corners: corners };
     var L = best.n === layout0.n ? layout0 : SL.layout(best.n, opt.groups);
-    var F = opt.align === false ? null : align(g, L, best.H);
-    var res = readWith(g, L, best.H, opt, F);
-    res.ok = true; res.n = best.n; res.rotation = best.rot * 90; res.H = best.H; res.field = F; res.corners = corners;
+    var res = readWith(g, L, best.H, opt);
+    res.ok = true; res.n = best.n; res.rotation = best.rot * 90; res.H = best.H; res.corners = corners;
     res.n_mismatch = !!(opt.n && best.n !== opt.n);
-    res.review = res.n_mismatch || !res.geometry_ok || res.flags.some(function (f) { return /^(multi|low_conf|code_incomplete|warp)/.test(f); });
+    res.review = res.n_mismatch || !res.geometry_ok || res.flags.some(function (f) { return /^(multi|low_conf|code_incomplete)/.test(f); });
     return res;
   }
 
-  /** ภาพดัดตรง (gray) ขนาด 210×297 มม. × pxPerMm — ใช้เก็บเป็นหลักฐาน/ตรวจทาน · F = res.field (ให้วงตรงกับตำแหน่งใน layout) */
-  function rectify(g, H, pxPerMm, F) {
+  /** ภาพดัดตรง (gray) ขนาด 210×297 มม. × pxPerMm — ใช้เก็บเป็นหลักฐาน/ตรวจทาน */
+  function rectify(g, H, pxPerMm) {
     var k = pxPerMm || 4, w = Math.round(210 * k), h = Math.round(297 * k), d = new Uint8Array(w * h);
     for (var y = 0; y < h; y++) {
       var my = (y + 0.5) / k;
       for (var x = 0; x < w; x++) {
-        var q = F ? F.at((x + 0.5) / k, my) : { x: (x + 0.5) / k, y: my };
-        var p = apply(H, q.x, q.y), X = Math.round(p.x), Y = Math.round(p.y);
+        var p = apply(H, (x + 0.5) / k, my), X = Math.round(p.x), Y = Math.round(p.y);
         d[y * w + x] = X >= 0 && Y >= 0 && X < g.w && Y < g.h ? g.d[Y * g.w + X] : 255;
       }
     }
     return { w: w, h: h, d: d };
   }
 
-  var OMR = { fromImageData: fromImageData, downscale: downscale, blobs: blobs, detect: detect, refine: refine, homography: homography, apply: apply, darkness: darkness, decide: decide, align: align, scan: scan, readWith: readWith, rectify: rectify };
+  var OMR = { fromImageData: fromImageData, downscale: downscale, blobs: blobs, detect: detect, refine: refine, homography: homography, apply: apply, darkness: darkness, decide: decide, scan: scan, readWith: readWith, rectify: rectify };
   root.OMR = OMR;
   if (typeof module !== 'undefined' && module.exports) module.exports = OMR;
 })(typeof window !== 'undefined' ? window : this);
