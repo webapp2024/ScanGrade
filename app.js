@@ -344,6 +344,11 @@
     if (multi.length) flags.push(['warn', 'ตอบซ้อน ข้อ ' + multi.join(', ')]);
     if (low.length) flags.push(['warn', 'อ่านไม่ชัด ข้อ ' + low.join(', ')]);
     if (blank.length) flags.push(['mute', 'ไม่ตอบ ' + blank.length + ' ข้อ']);
+    // อ่านไม่ได้หลายข้อ มักเป็นเพราะแสงน้อย (กล้องเห็นดินสอจางลง) ไม่ใช่นักเรียนไม่ตอบ
+    if (blank.length + low.length >= Math.max(3, Math.ceil(ex.n_items * 0.2))) {
+      var canTorch = !$('#scTorch').classList.contains('hidden') && !cam.torch;
+      flags.push(['warn', 'หลายข้ออ่านไม่ได้ — ถ้านักเรียนระบายครบ แสงอาจน้อยไป ' + (canTorch ? 'กด ⚡ เปิดไฟฉาย' : 'ย้ายไปที่สว่าง') + ' แล้วกด สแกนใหม่']);
+    }
     var needReview = r.review || !st || flags.some(function (f) { return f[0] !== 'mute'; });
     var sc = ex.key_ready ? score(ex, r.answers) : null;
     var marks = sc ? sc.marks : [];
